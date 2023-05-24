@@ -7,6 +7,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 
+/**
+ * 配置加载工具类
+ *
+ * @author Gu
+ * @since 2023-05-24
+ */
 public class PropUtil {
     private static final Logger LOGGER = LoggerFactory.getLogger(JedisUtil.class);
     private static final Properties prop;

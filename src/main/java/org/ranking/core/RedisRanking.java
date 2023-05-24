@@ -1,7 +1,7 @@
-package org.ranking.statistic;
+package org.ranking.core;
 
 import org.ranking.model.RankingObj;
-import org.ranking.model.TimeUnit;
+import org.ranking.model.Time;
 import org.ranking.util.JedisUtil;
 import org.ranking.util.ScheduledExecutorUtil;
 import org.slf4j.Logger;
@@ -10,35 +10,42 @@ import redis.clients.jedis.Jedis;
 import redis.clients.jedis.resps.Tuple;
 
 import java.util.*;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.stream.Collectors;
 
-public class RedisStatistic extends AbstractStatistic {
+/**
+ * redis排行榜实现类
+ * <p>适用分部署多台节点提供统计数据，在redis中使用滑动窗口方式实时统计，再由定时线程汇总结果</p>
+ *
+ * @author Gu
+ * @since 2023-05-24
+ */
+public class RedisRanking extends AbstractRanking {
     private static final Logger LOGGER = LoggerFactory.getLogger(JedisUtil.class);
     private static final String METADATA = "_metadata";
 
     private static final String RANKING = "_ranking";
 
-    public RedisStatistic(String name, int maxRankingSize, TimeUnit rankingTime, int windowNum) {
+    public RedisRanking(String name, int maxRankingSize, Time rankingTime, int windowNum) {
         super(name, maxRankingSize, rankingTime, windowNum);
         init(name, windowNum);
     }
 
-    public RedisStatistic(String name, int maxRankingSize, TimeUnit rankingTime, int maxWindowSize, int windowNum) {
-        super(name, maxRankingSize, rankingTime, maxWindowSize, windowNum);
+    public RedisRanking(String name, int maxRankingSize, Time rankingTime, int maxWindowSize, int windowNum, Time reduceTime) {
+        super(name, maxRankingSize, rankingTime, maxWindowSize, windowNum, reduceTime);
         init(name, windowNum);
     }
 
     private void init(String name, int windowNum) {
-        String script = "if (redis.call('exists',KEYS[1]) == 0) then " +
-                "local currentSecond = redis.call('time')[1]; " +
-                "redis.call('hset', KEYS[1], 'startTime', currentSecond); " +
-                "redis.call('hset', KEYS[1], 'maxRankingSize', ARGV[1]); " +
-                "redis.call('hset', KEYS[1], 'rankingTime', ARGV[2]); " +
-                "redis.call('hset', KEYS[1], 'maxWindowSize', ARGV[3]); " +
-                "redis.call('hset', KEYS[1], 'intervalInSecond', ARGV[4]); " +
-                "redis.call('hset', KEYS[1], 'windowNum', ARGV[5]); " +
-                "return nil; " +
-                "else return redis.call('hgetall', KEYS[1]);" +
+        String script = "if (redis.call('exists',KEYS[1]) == 0) then\n" +
+                "local currentSecond = redis.call('time')[1];\n" +
+                "redis.call('hset', KEYS[1], 'startTime', currentSecond);\n" +
+                "redis.call('hset', KEYS[1], 'maxRankingSize', ARGV[1]);\n" +
+                "redis.call('hset', KEYS[1], 'rankingTime', ARGV[2]);\n" +
+                "redis.call('hset', KEYS[1], 'maxWindowSize', ARGV[3]);\n" +
+                "redis.call('hset', KEYS[1], 'intervalInSecond', ARGV[4]);\n" +
+                "redis.call('hset', KEYS[1], 'windowNum', ARGV[5]);\n" +
+                "return nil;\n" +
+                "else return redis.call('hgetall', KEYS[1]);\n" +
                 "end; ";
 
         try (Jedis jedis = JedisUtil.getJedis()) {
@@ -48,7 +55,7 @@ public class RedisStatistic extends AbstractStatistic {
                             Integer.toString(windowNum)));
             if (result == null) {
                 LOGGER.info("Create statistics ranking, info : {}", this.toString());
-                ScheduledExecutorUtil.execute(this::reduceRanking, 10);
+                ScheduledExecutorUtil.execute(this::reduceRanking, reduceTime);
                 return;
             }
             LOGGER.info("Use existed statistics ranking.");
@@ -73,32 +80,7 @@ public class RedisStatistic extends AbstractStatistic {
                 Integer.toString(maxWindowSize).equals(map.get("maxWindowSize")) && Integer.toString(windowNum).equals(map.get("windowNum"));
     }
 
-    private Runnable reduceRanking() {
-        return () -> {
-            StringBuilder reduce = new StringBuilder();
-            reduce.append("redis.call('zunionstore', KEYS[1], ARGV[1], ");
-            for (int i = 0; i < windowNum; i++) {
-                reduce.append("\\'" + name + "_" + i + "\\'");
-                if (i == windowNum - 1) {
-                    reduce.append(");");
-                } else {
-                    reduce.append(", ");
-                }
-            }
-            String shorten = "local size = redis.call('zcard', KEYS[1]); " +
-                    "if(size > ARGV[2]) then " +
-                    "redis.call('zremrangebyrank', KEYS[1], 0, size - ARGV[2] - 1); " +
-                    "end";
-
-            reduce.append(shorten);
-            System.out.printf(reduce.toString());
-            try (Jedis jedis = JedisUtil.getJedis()) {
-                jedis.eval(reduce.toString(), Arrays.asList(name + RANKING), Arrays.asList(Integer.toString(windowNum), Integer.toString(maxRankingSize)));
-            }
-        };
-    }
-
-    public void reduceRanking2() {
+    private void reduceRanking() {
         StringBuilder reduce = new StringBuilder();
         reduce.append("redis.call('zunionstore', KEYS[1], ARGV[1], ");
         for (int i = 0; i < windowNum; i++) {
@@ -109,16 +91,15 @@ public class RedisStatistic extends AbstractStatistic {
                 reduce.append(", ");
             }
         }
-        String shorten = "local size = redis.call('zcard', KEYS[1]);\n " +
-                "if(size > tonumber(ARGV[2])) then\n " +
-                "redis.call('zremrangebyrank', KEYS[1], 0, size - ARGV[2] - 1);\n " +
-                "end";
+        String shorten = "local size = redis.call('zcard', KEYS[1]);\n" +
+                "if(size > tonumber(ARGV[2])) then\n" +
+                "redis.call('zremrangebyrank', KEYS[1], 0, size - ARGV[2] - 1);\n" +
+                "end ";
 
         reduce.append(shorten);
-        System.out.printf(reduce.toString());
         try (Jedis jedis = JedisUtil.getJedis()) {
-            Object res = jedis.eval(reduce.toString(), Arrays.asList(name + RANKING), Arrays.asList(Integer.toString(windowNum), Integer.toString(maxRankingSize)));
-            System.out.printf("");
+            jedis.eval(reduce.toString(), Arrays.asList(name + RANKING), Arrays.asList(Integer.toString(windowNum), Integer.toString(maxRankingSize)));
+            LOGGER.info("Reduce statistic info into {}", name + RANKING);
         }
     }
 
@@ -172,9 +153,12 @@ public class RedisStatistic extends AbstractStatistic {
     @Override
     public List<RankingObj> getRanking(int start, int end) {
         try (Jedis jedis = JedisUtil.getJedis()) {
-            List<Tuple> ranking = jedis.zrevrangeByScoreWithScores(RANKING, start, end);
-            System.out.printf("");
+            List<Tuple> ranking = jedis.zrevrangeWithScores(name + RANKING, start, end);
+            if (ranking == null || ranking.size() == 0) {
+                return Collections.EMPTY_LIST;
+            }
+
+            return ranking.stream().map(tuple -> new RankingObj(tuple.getElement(), Math.round(tuple.getScore()))).collect(Collectors.toList());
         }
-        return null;
     }
 }

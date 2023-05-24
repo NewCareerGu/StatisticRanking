@@ -7,6 +7,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 定时任务工具类
+ *
+ * @author Gu
+ * @since 2023-05-24
+ */
 public class ScheduledExecutorUtil {
     private static final Logger LOGGER = LoggerFactory.getLogger(ScheduledExecutorUtil.class);
 
@@ -17,10 +23,10 @@ public class ScheduledExecutorUtil {
 
     public static void execute(Runnable runnable, int period) {
         executor.scheduleAtFixedRate(() -> {
-                    LOGGER.info("Start task");
+                    LOGGER.info("Start reduce task.");
                     runnable.run();
-                    LOGGER.info("End task");
+                    LOGGER.info("End reduce task.");
                 }
-                , 0, period, TimeUnit.SECONDS);
+                , 1, period, TimeUnit.SECONDS);
     }
 }
