@@ -30,11 +30,14 @@ public class RedisRanking extends AbstractRanking {
         init(name, windowNum);
     }
 
-    public RedisRanking(String name, int maxRankingSize, Time rankingTime, int maxWindowSize, int windowNum, Time reduceTime) {
-        super(name, maxRankingSize, rankingTime, maxWindowSize, windowNum, reduceTime);
+    public RedisRanking(String name, int maxRankingSize, Time rankingTime, int maxWindowSize, int windowNum, Time updatePeriod) {
+        super(name, maxRankingSize, rankingTime, maxWindowSize, windowNum, updatePeriod);
         init(name, windowNum);
     }
 
+    /**
+     * 初始化设置元数据，如果是新建则启动定时线程汇总，已有则只上报和获取数据；
+     */
     private void init(String name, int windowNum) {
         String script = "if (redis.call('exists',KEYS[1]) == 0) then\n" +
                 "local currentSecond = redis.call('time')[1];\n" +
@@ -55,7 +58,7 @@ public class RedisRanking extends AbstractRanking {
                             Integer.toString(windowNum)));
             if (result == null) {
                 LOGGER.info("Create statistics ranking, info : {}", this.toString());
-                ScheduledExecutorUtil.execute(this::reduceRanking, reduceTime);
+                ScheduledExecutorUtil.execute(this::updateRanking, updatePeriod);
                 return;
             }
             LOGGER.info("Use existed statistics ranking.");
@@ -80,7 +83,7 @@ public class RedisRanking extends AbstractRanking {
                 Integer.toString(maxWindowSize).equals(map.get("maxWindowSize")) && Integer.toString(windowNum).equals(map.get("windowNum"));
     }
 
-    private void reduceRanking() {
+    private void updateRanking() {
         StringBuilder reduce = new StringBuilder();
         reduce.append("redis.call('zunionstore', KEYS[1], ARGV[1], ");
         for (int i = 0; i < windowNum; i++) {
